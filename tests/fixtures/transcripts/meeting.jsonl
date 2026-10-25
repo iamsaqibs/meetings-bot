@@ -1,0 +1,11 @@
+{"ts":"2026-10-25T13:00:00.000Z","speaker":"Aadil","text":"Let's start with the roadmap.","is_self":false,"source":"caption"}
+{"ts":"2026-10-25T13:00:05.000Z","speaker":"Aadil","text":"I'll ask the assistant later.","is_self":false,"source":"caption"}
+{"ts":"2026-10-25T13:00:10.000Z","speaker":"Nora","text":"What's the deploy status?","is_self":false,"source":"caption"}
+{"ts":"2026-10-25T13:00:20.000Z","speaker":"Aadil","text":"Hey Saqib's Assistant, what's the auth flow?","is_self":false,"source":"caption"}
+{"ts":"2026-10-25T13:00:30.000Z","speaker":"Nora","text":"Saqib's Assistant","is_self":false,"source":"caption"}
+{"ts":"2026-10-25T13:00:31.000Z","speaker":"Nora","text":"can you check the readme?","is_self":false,"source":"caption"}
+{"ts":"2026-10-25T13:00:40.000Z","speaker":"Saqib's Assistant","text":"The auth flow is cookie based.","is_self":true,"source":"tts"}
+{"ts":"2026-10-25T13:00:48.000Z","speaker":"Assistant","text":"I'll take the next ticket.","is_self":false,"source":"caption"}
+{"ts":"2026-10-25T13:01:00.000Z","speaker":"Aadil","text":"Hey assistant, are you there?","is_self":false,"source":"caption"}
+{"ts":"2026-10-25T13:01:03.000Z","speaker":"Nora","text":"Assistant, please explain the joiner.","is_self":false,"source":"caption"}
+{"ts":"2026-10-25T13:01:20.000Z","speaker":"Aadil","text":"Hey assistant, what is our budget?","is_self":false,"source":"caption"}
