@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { Command } from "commander";
-import { editConfig } from "../config/load.js";
+import { runAuth, runJoin } from "../auth/joiner.js";
+import { editConfig, loadConfig, mergeCliFlags } from "../config/load.js";
 
 const program = new Command();
 
@@ -17,17 +18,23 @@ program
   .option("--name <name>", "Override the bot display name")
   .option("--headed", "Show the Chromium window")
   .option("--model <tag>", "Override the Ollama model")
-  .action(() => {
-    throw new Error("not implemented");
-  });
+  .action((opts: { meeting: string; project: string; name?: string; headed?: boolean; model?: string }) =>
+    guard(async () => {
+      const config = mergeCliFlags(loadConfig(), { name: opts.name, model: opts.model });
+      await runJoin({
+        meeting: opts.meeting,
+        project: opts.project,
+        headed: Boolean(opts.headed),
+        displayName: config.bot_name,
+      });
+    }),
+  );
 
 program
   .command("auth")
   .description("One-time headful Google sign-in into the persistent profile")
   .option("--profile <dir>", "Chromium profile directory")
-  .action(() => {
-    throw new Error("not implemented");
-  });
+  .action((opts: { profile?: string }) => guard(() => runAuth(opts)));
 
 program
   .command("rehearse")
@@ -61,3 +68,12 @@ program
   });
 
 program.parse();
+
+async function guard(action: () => Promise<void>): Promise<void> {
+  try {
+    await action();
+  } catch (err) {
+    console.error(err instanceof Error ? err.message : String(err));
+    process.exit(1);
+  }
+}
