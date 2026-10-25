@@ -1,6 +1,7 @@
 #!/usr/bin/env node
+import fs from "node:fs";
 import { createRequire } from "node:module";
-import { pathToFileURL } from "node:url";
+import { fileURLToPath } from "node:url";
 import { Command } from "commander";
 import { runMeeting } from "../agent/orchestrator.js";
 import { runAuth } from "../auth/joiner.js";
@@ -94,7 +95,7 @@ async function finishMeeting(opts: JoinFlags, rehearse: boolean): Promise<void> 
   });
   console.log(`Transcript: ${result.transcriptPath}`);
   if (result.notesPath) console.log(`Notes: ${result.notesPath}`);
-  process.exit(result.exitCode);
+  process.exitCode = result.exitCode;
 }
 
 async function guard(action: () => Promise<void>): Promise<void> {
@@ -102,11 +103,18 @@ async function guard(action: () => Promise<void>): Promise<void> {
     await action();
   } catch (err) {
     console.error(err instanceof Error ? err.message : String(err));
-    process.exit(1);
+    process.exitCode = 1;
   }
 }
 
-const invoked = process.argv[1];
-if (invoked && import.meta.url === pathToFileURL(invoked).href) {
-  createProgram().parse();
+if (isCliEntry()) createProgram().parse();
+
+function isCliEntry(): boolean {
+  const invoked = process.argv[1];
+  if (!invoked) return false;
+  try {
+    return fs.realpathSync(invoked) === fs.realpathSync(fileURLToPath(import.meta.url));
+  } catch {
+    return false;
+  }
 }

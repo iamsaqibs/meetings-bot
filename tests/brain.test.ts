@@ -171,6 +171,7 @@ describe("generateReply", () => {
         ollama: { model: "gpt-oss:120b-cloud", max_context_tokens: 40 },
       }),
     });
+    expect(prompt).toContain("You are Saqib's Assistant.");
     expect(prompt).toContain("Never invents project facts");
     expect(prompt).toContain("That's better answered by Saqib himself — over to you.");
     expect(prompt).toContain("NEWEST_KEEP");

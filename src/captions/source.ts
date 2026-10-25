@@ -5,11 +5,13 @@ import type { TranscriptLine } from "../transcript/types.js";
 import {
   CAPTION_KEY,
   CAPTION_ROW_HINTS,
-  CC_BUTTON_LABELS,
+  CC_OFF_LABELS,
+  CC_ON_LABELS,
   DEFAULT_CAPTION_LABELS,
   JSNAME_SELECTORS,
   SPEAKER_SPAN_MAX,
   isIconAlt,
+  isMeetChromeText,
 } from "./selectors.js";
 
 export interface HtmlNode {
@@ -83,9 +85,20 @@ export class CaptionFinalizer {
 
   collect(now: number): TranscriptLine[] {
     const finalized: TranscriptLine[] = [];
-    for (const [id, row] of this.rows) {
+    for (const row of this.rows.values()) {
       if (row.emitted || now - row.stableAt < this.finalizeMs) continue;
       finalized.push(this.toLine(row));
+      row.emitted = true;
+    }
+    return finalized;
+  }
+
+  /** Drop rows that left the caption region. Finish a line that disappeared mid-sentence. */
+  retain(liveIds: ReadonlySet<string>): TranscriptLine[] {
+    const finalized: TranscriptLine[] = [];
+    for (const [id, row] of this.rows) {
+      if (liveIds.has(id)) continue;
+      if (!row.emitted && row.text.trim().length > 0) finalized.push(this.toLine(row));
       this.rows.delete(id);
     }
     return finalized;
@@ -195,23 +208,12 @@ export async function attachCaptions(
 ): Promise<CaptionController> {
   const labels = config.captions.ariaLabels;
   const finalizer = new CaptionFinalizer(config.wake.finalize_ms, config.bot_name);
-  let captionsOn = false;
-  try {
-    await page.keyboard.press(CAPTION_KEY);
-    captionsOn = true;
-  } catch (err) {
-    logger.warn({ err }, "caption keypress failed; trying the CC button");
-  }
-  if (!captionsOn) {
-    const clicked = await page.evaluate(ccScript()).catch(() => false);
-    captionsOn = clicked === true;
-  }
+  const captionsOn = await ensureCaptions(page);
   await page.evaluate(observerScript(labels)).catch((err: unknown) => {
     logger.warn({ err }, "caption observer failed to install");
   });
-  if (!captionsOn) {
-    logger.warn("captions could not be enabled; staying silent and recording whatever arrives");
-  }
+  if (captionsOn) logger.info("captions on");
+  else logger.warn("captions could not be enabled; staying silent until a caption region appears");
 
   const timer = setInterval(() => {
     void page
@@ -219,19 +221,32 @@ export async function attachCaptions(
       .then((rows) => {
         if (!Array.isArray(rows)) return;
         const now = Date.now();
+        const live = new Set<string>();
         for (const row of rows) {
-          if (!isRawRow(row)) continue;
+          if (!isRawRow(row) || isMeetChromeText(row.text)) continue;
+          live.add(row.id);
           const attributed = attributeSpeaker(row);
+          if (isMeetChromeText(attributed.text)) continue;
           for (const line of finalizer.push({
             id: row.id,
             speaker: attributed.speaker,
             text: attributed.text,
             atMs: now,
           })) {
+            logger.info({ speaker: line.speaker, text: line.text }, "heard");
             sink(line);
           }
         }
-        for (const line of finalizer.collect(now)) sink(line);
+        if (rows.length > 0) {
+          for (const line of finalizer.retain(live)) {
+            logger.info({ speaker: line.speaker, text: line.text }, "heard");
+            sink(line);
+          }
+        }
+        for (const line of finalizer.collect(now)) {
+          logger.info({ speaker: line.speaker, text: line.text }, "heard");
+          sink(line);
+        }
       })
       .catch((err: unknown) => {
         logger.warn({ err }, "caption drain failed");
@@ -332,18 +347,46 @@ function isRawRow(value: unknown): value is RawCaptionRow {
   return typeof row.id === "string" && typeof row.text === "string";
 }
 
-function ccScript(): string {
-  const labels = JSON.stringify([...CC_BUTTON_LABELS]);
+async function ensureCaptions(page: Page): Promise<boolean> {
+  const read = await page.evaluate(captionToggleScript("read")).catch(() => "missing");
+  if (read === "on") return true;
+  if (read === "off") {
+    const enabled = await page.evaluate(captionToggleScript("enable")).catch(() => "missing");
+    return enabled === "clicked" || enabled === "on";
+  }
+  try {
+    await page.bringToFront();
+    const box = (await page.evaluate("({ w: window.innerWidth || 1280, h: window.innerHeight || 720 })")) as {
+      w: number;
+      h: number;
+    };
+    await page.mouse.move(Math.floor(box.w / 2), Math.max(0, box.h - 12));
+    await new Promise((resolve) => setTimeout(resolve, 400));
+    const revealed = await page.evaluate(captionToggleScript("enable")).catch(() => "missing");
+    if (revealed === "clicked" || revealed === "on") return true;
+    await page.keyboard.press(CAPTION_KEY);
+    const after = await page.evaluate(captionToggleScript("read")).catch(() => "missing");
+    return after === "on";
+  } catch (err) {
+    logger.warn({ err }, "could not enable captions");
+    return false;
+  }
+}
+
+function captionToggleScript(mode: "read" | "enable"): string {
   return `(() => {
-    const labels = ${labels};
-    const nodes = Array.from(document.querySelectorAll("button, [role='button']"));
-    const match = nodes.find((node) => {
-      const text = (node.getAttribute("aria-label") || node.innerText || "").trim();
-      return labels.some((label) => text === label || text.toLowerCase().includes(label.toLowerCase()));
-    });
-    if (!match) return false;
-    match.click();
-    return true;
+    const onLabels = ${JSON.stringify([...CC_ON_LABELS])};
+    const offLabels = ${JSON.stringify([...CC_OFF_LABELS])};
+    const mode = ${JSON.stringify(mode)};
+    const labelOf = (node) => (node.getAttribute("aria-label") || node.getAttribute("data-tooltip") || "").trim().toLowerCase();
+    const buttons = Array.from(document.querySelectorAll("button, [role='button']")).map((node) => ({ node, label: labelOf(node) }));
+    const isOff = (label) => offLabels.some((item) => label === item || label.includes(item));
+    const isOn = (label) => onLabels.some((item) => label === item || label.includes(item));
+    if (buttons.some(({ label }) => isOff(label))) return "on";
+    const turnOn = buttons.find(({ label }) => isOn(label));
+    if (!turnOn) return "missing";
+    if (mode === "enable") turnOn.node.click();
+    return mode === "enable" ? "clicked" : "off";
   })()`;
 }
 
@@ -358,18 +401,16 @@ function observerScript(ariaLabels: string[]): string {
     window.__mbCaptions = [];
     const bag = ${bag};
     const findRoot = () => {
-      const regions = Array.from(document.querySelectorAll('[role="region"]'));
+      const regions = Array.from(document.querySelectorAll('[role="region"], [aria-label]'));
       const semantic = regions.find((node) => bag.labels.includes(node.getAttribute("aria-label") || ""));
       if (semantic) return semantic;
+      const named = regions.find((node) => /caption/i.test(node.getAttribute("aria-label") || ""));
+      if (named) return named;
       for (const name of bag.jsnames) {
         const node = document.querySelector('[jsname="' + name + '"]');
         if (node) return node;
       }
-      const live = Array.from(document.querySelectorAll("[aria-live], [role='region']")).filter((node) => {
-        const label = node.getAttribute("aria-label") || "";
-        return !/toolbar|controls/i.test(label);
-      });
-      return live.sort((a, b) => b.querySelectorAll("img[alt], [data-self-name]").length - a.querySelectorAll("img[alt], [data-self-name]").length)[0] || null;
+      return null;
     };
     const publish = () => {
       const root = findRoot();
@@ -379,17 +420,19 @@ function observerScript(ariaLabels: string[]): string {
         const span = node.querySelector("span");
         const self = node.querySelector("[data-self-name]") || (node.hasAttribute("data-self-name") ? node : null);
         return {
-          id: node.getAttribute("data-caption-id") || String(index),
+          id: node.getAttribute("data-caption-id") || (root.getAttribute("jsname") || "cc") + ":" + index,
           imgAlt: img ? img.getAttribute("alt") || "" : "",
           leadingSpan: span ? (span.textContent || "").trim() : "",
           text: (node.textContent || "").replace(/\\s+/g, " ").trim(),
           selfName: self ? self.getAttribute("data-self-name") || "" : "",
         };
-      });
+      }).filter((row) => row.text.length > 0);
+      const signature = rows.map((row) => row.id + "|" + row.text).join("\\n");
+      if (signature === window.__mbCaptionSig) return;
+      window.__mbCaptionSig = signature;
       window.__mbCaptions.push(...rows);
     };
-    const root = findRoot() || document.body;
-    new MutationObserver(publish).observe(root, { childList: true, subtree: true, characterData: true });
+    new MutationObserver(publish).observe(document.body, { childList: true, subtree: true, characterData: true });
     publish();
     return true;
   })()`;

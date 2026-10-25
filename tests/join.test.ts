@@ -8,8 +8,11 @@ import {
   controlToDisable,
   desktopUserAgent,
   findJoinLabel,
+  isNavigationError,
   joinMeeting,
   launchPlan,
+  retryNavigation,
+  selectChromeTarget,
   snapshotShowsLeave,
   snapshotShowsSignedIn,
   type Clock,
@@ -102,7 +105,7 @@ describe("profile and launch plan", () => {
     expect(() => assertProfile(path.join(dir, "nope"))).toThrow(/meetings-bot auth/);
   });
 
-  it("launches auth headful and join headless with the audio flags", () => {
+  it("launches auth headful and join headless with the audio flags", async () => {
     const auth = launchPlan("auth", { profileDir: "/tmp/profile" });
     const join = launchPlan("join", { profileDir: "/tmp/profile" });
     const headed = launchPlan("join", { profileDir: "/tmp/profile", headed: true });
@@ -111,6 +114,27 @@ describe("profile and launch plan", () => {
     expect(headed.headless).toBe(false);
     expect(join.userDataDir).toBe("/tmp/profile");
     expect(join.channel).toBe("chrome");
+    expect(selectChromeTarget(() => true, "/tmp/chrome")).toEqual({ channel: "chrome" });
+    expect(
+      selectChromeTarget((candidate) => candidate === "/tmp/chrome-for-testing", "/tmp/chrome-for-testing"),
+    ).toEqual({ executablePath: "/tmp/chrome-for-testing" });
+    expect(() => selectChromeTarget(() => false, undefined)).toThrow(/Install the stable Chrome app/);
+    expect(isNavigationError(new Error("Execution context was destroyed, most likely because of a navigation."))).toBe(true);
+    expect(isNavigationError(new Error("Meet DOM changed"))).toBe(false);
+    let calls = 0;
+    await expect(
+      retryNavigation(
+        async () => {
+          calls += 1;
+          if (calls < 3) throw new Error("Execution context was destroyed, most likely because of a navigation.");
+          return "joined";
+        },
+        async () => undefined,
+      ),
+    ).resolves.toBe("joined");
+    await expect(retryNavigation(async () => {
+      throw new Error("profile missing");
+    }, async () => undefined)).rejects.toThrow(/profile missing/);
     expect(join.args).toEqual(expect.arrayContaining([
       "--use-fake-ui-for-media-stream",
       "--use-fake-device-for-media-stream",

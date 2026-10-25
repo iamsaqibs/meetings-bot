@@ -1,9 +1,11 @@
+import fs from "node:fs";
 import { createRequire } from "node:module";
 import type { PuppeteerExtra } from "puppeteer-extra";
 import type { Browser, Page } from "puppeteer";
 
 const require = createRequire(import.meta.url);
 const puppeteer = require("puppeteer-extra") as PuppeteerExtra;
+const bundledPuppeteer = require("puppeteer") as { executablePath: () => string };
 const StealthPlugin = require("puppeteer-extra-plugin-stealth") as () => {
   _isPuppeteerExtraPlugin: boolean;
 };
@@ -97,6 +99,25 @@ export function desktopUserAgent(userAgent: string): string {
   return userAgent.replaceAll("HeadlessChrome", "Chrome");
 }
 
+const STABLE_CHROME_PATH = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
+
+/** Prefer installed Google Chrome. Fall back to Puppeteer's Chrome for Testing. */
+export function selectChromeTarget(
+  exists: (path: string) => boolean,
+  bundledPath: string | undefined,
+  home = "",
+): { channel: "chrome" } | { executablePath: string } {
+  const candidates = [
+    STABLE_CHROME_PATH,
+    ...(home ? [`${home}/Applications/Google Chrome.app/Contents/MacOS/Google Chrome`] : []),
+  ];
+  if (candidates.some((candidate) => exists(candidate))) return { channel: "chrome" };
+  if (bundledPath && exists(bundledPath)) return { executablePath: bundledPath };
+  throw new Error(
+    "Google Chrome is not installed. Install the stable Chrome app from https://www.google.com/chrome/ and run `meetings-bot auth` again.",
+  );
+}
+
 export function launchPlan(mode: "auth" | "join", opts: { profileDir: string; headed?: boolean }) {
   const headed = mode === "auth" || opts.headed === true;
   return {
@@ -126,6 +147,32 @@ export function snapshotShowsLeave(snapshot: PageSnapshot): boolean {
 export function snapshotShowsSignedIn(snapshot: PageSnapshot): boolean {
   if (snapshot.hasAvatar) return true;
   return SIGNED_IN_URL_HINTS.some((hint) => snapshot.url.includes(hint));
+}
+
+/** Meet redirects while the page is still being read. Those errors are not a failed join. */
+export function isNavigationError(err: unknown): boolean {
+  const message = err instanceof Error ? err.message : String(err);
+  return /Execution context was destroyed|Cannot find context|Execution context is not available|Navigating frame was detached|frame was detached|Target closed|Session closed|net::ERR_ABORTED/i.test(
+    message,
+  );
+}
+
+export async function retryNavigation<T>(
+  run: () => Promise<T>,
+  wait: (ms: number) => Promise<void> = (ms) => realClock.wait(ms),
+  attempts = 5,
+): Promise<T> {
+  let last: unknown;
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    try {
+      return await run();
+    } catch (err) {
+      last = err;
+      if (!isNavigationError(err) || attempt === attempts - 1) throw err;
+      await wait(300);
+    }
+  }
+  throw last;
 }
 
 export async function joinMeeting(page: MeetPage, meetingUrl: string, opts: JoinOptions): Promise<JoinResult> {
@@ -187,11 +234,23 @@ export async function launchBrowser(
 ): Promise<Browser> {
   const dir = mode === "join" ? assertProfile(opts.profile) : profileDir(opts.profile);
   const plan = launchPlan(mode, { profileDir: dir, headed: opts.headed });
+  let bundledPath: string | undefined;
+  try {
+    bundledPath = bundledPuppeteer.executablePath();
+  } catch {
+    bundledPath = undefined;
+  }
+  const target = selectChromeTarget(fs.existsSync, bundledPath, process.env.HOME);
+  if ("executablePath" in target) {
+    logger.warn(
+      "Google Chrome is not installed. Opening Chrome for Testing instead. Install Google Chrome if the sign-in page blocks this browser.",
+    );
+  }
   const browser = await puppeteer.launch({
     headless: plan.headless,
     userDataDir: plan.userDataDir,
-    channel: plan.channel,
     args: plan.args,
+    ...target,
   });
   const page = await firstPage(browser);
   const current = await page.browser().userAgent().catch(() => DESKTOP_CHROME_UA);
@@ -265,11 +324,26 @@ export async function runJoin(opts: {
 export function adaptPage(page: Page): MeetPage {
   return {
     async goto(url: string): Promise<void> {
-      await page.goto(url, { waitUntil: "domcontentloaded", timeout: 60_000 });
+      try {
+        await retryNavigation(() => page.goto(url, { waitUntil: "domcontentloaded", timeout: 60_000 }));
+      } catch (err) {
+        if (!isNavigationError(err)) throw err;
+        let landed = "";
+        try {
+          landed = page.url();
+        } catch {
+          landed = "";
+        }
+        if (landed.includes("meet.google.com")) return;
+        throw new Error(
+          "Meet navigated away while opening the call. Re-run with --headed, stay in the Meet, and admit Jarvis from the lobby.",
+          { cause: err },
+        );
+      }
     },
     snapshot: () => readSnapshot(page),
     async clickButton(label: string): Promise<void> {
-      const clicked = await page.evaluate(clickScript(label));
+      const clicked = await retryNavigation(() => page.evaluate(clickScript(label)));
       if (clicked !== true) throw new MeetDomChangedError(`button ${label}`);
     },
   };
@@ -290,6 +364,10 @@ function clickScript(label: string): string {
 }
 
 async function readSnapshot(page: Page): Promise<PageSnapshot> {
+  return retryNavigation(() => readSnapshotOnce(page));
+}
+
+async function readSnapshotOnce(page: Page): Promise<PageSnapshot> {
   const bag = {
     inCallLabels: [...IN_CALL_LABELS],
     leftText: LEFT_MEETING_TEXT,
@@ -354,14 +432,20 @@ async function waitFor(
   step: string,
 ): Promise<PageSnapshot> {
   const started = clock.now();
-  let latest = await page.snapshot();
+  let latest: PageSnapshot | undefined;
   while (clock.now() - started <= timeoutMs) {
+    try {
+      latest = await page.snapshot();
+    } catch (err) {
+      if (!isNavigationError(err)) throw err;
+      await clock.wait(pollMs);
+      continue;
+    }
     if (pred(latest)) return latest;
     if (snapshotShowsLeave(latest)) {
       throw new Error(`The meeting ended while ${step}.`);
     }
     await clock.wait(pollMs);
-    latest = await page.snapshot();
   }
   if (step === "admission") {
     throw new Error(

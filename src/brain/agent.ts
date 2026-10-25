@@ -59,7 +59,7 @@ export function trimToWordCap(text: string, maxWords: number): string {
 
 export function buildSystemPrompt(input: GenerateReplyInput): string {
   const policyAndPersona = [
-    "You are Saqib's meeting assistant. You are in the call as a second participant. Speak only the answer to the latest question addressed to you.",
+    `You are ${input.config.bot_name}. You are in the call as a second participant. Speak only the answer to the latest question addressed to you.`,
     BEHAVIOR_POLICY,
     `Questions about commitments, estimates, approval, schedule, or what Saqib would prefer get this deferral and nothing more: "${DEFER_LINE}"`,
     `Answer in at most ${input.config.limits.max_reply_words} words of plain spoken prose. No markdown, no bullet lists, no headings, and no code fences. The answer will be read aloud.`,

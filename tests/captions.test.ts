@@ -2,7 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
-import { isIconAlt } from "../src/captions/selectors.js";
+import { isIconAlt, isMeetChromeText } from "../src/captions/selectors.js";
 import {
   CaptionFinalizer,
   attributeSpeaker,
@@ -18,6 +18,12 @@ function html(name: string): string {
 }
 
 describe("caption finalizer", () => {
+  it("ignores Meet's own toolbar text", () => {
+    expect(isMeetChromeText("Press Down Arrow to open the hover tray and Escape to close it.")).toBe(true);
+    expect(isMeetChromeText("Take notes with Gemini")).toBe(true);
+    expect(isMeetChromeText("Jarvis, what's the auth flow?")).toBe(false);
+  });
+
   it("waits until the text stops changing, then emits the stable line", () => {
     const finalizer = new CaptionFinalizer(1500, "Saqib's Assistant");
     expect(finalizer.push({ id: "a", speaker: "Ada", text: "hel", atMs: 1_000 })).toEqual([]);

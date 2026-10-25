@@ -1,6 +1,6 @@
 import path from "node:path";
 import type { Browser, Page } from "puppeteer";
-import { adaptPage, joinMeeting, joinPage, launchBrowser, readPageSnapshot } from "../auth/joiner.js";
+import { adaptPage, isNavigationError, joinMeeting, joinPage, launchBrowser, readPageSnapshot } from "../auth/joiner.js";
 import {
   generateReply as defaultGenerateReply,
   type GenerateReplyInput,
@@ -439,19 +439,20 @@ async function driveMeeting(
   });
   let captions: CaptionController | null = null;
   let failure: unknown;
+  let watch: { stop: () => void } | null = null;
   const ports = livePorts(page, provider, state);
   const idleTimeoutMs = state.config.meet.idle_timeout_minutes * 60_000;
-  const watch = startLeaveWatch({
-    idleTimeoutMs,
-    readSignals: () => readLeave(browser, page, state),
-    onLeave: (reason) => {
-      stop = reason === "browser" ? "crash" : "clean";
-      ended = true;
-    },
-  });
   try {
     await installAudioBridge(page);
     await joinMeeting(adaptPage(page), options.meeting, { displayName: state.config.bot_name });
+    watch = startLeaveWatch({
+      idleTimeoutMs,
+      readSignals: () => readLeave(browser, page, state),
+      onLeave: (reason) => {
+        stop = reason === "browser" ? "crash" : "clean";
+        ended = true;
+      },
+    });
     captions = await attachCaptions(page, state.config, (line) => {
       void handleCaption(state, line, ports).catch((err: unknown) => {
         logger.error({ err }, "caption turn failed");
@@ -462,10 +463,10 @@ async function driveMeeting(
     failure = err;
     stop = "crash";
   } finally {
-    watch.stop();
+    watch?.stop();
     restore();
     await captions?.stop().catch(() => undefined);
-    await browser.close().catch(() => undefined);
+    await closeBrowser(browser);
   }
 
   const partial = stop !== "clean";
@@ -536,6 +537,12 @@ function livePorts(page: Page, provider: TtsProvider | null, state: TurnState): 
   };
 }
 
+async function closeBrowser(browser: Browser): Promise<void> {
+  const pages = await browser.pages().catch(() => []);
+  await Promise.all(pages.map((open) => open.goto("about:blank", { timeout: 2_000 }).catch(() => undefined)));
+  await browser.close().catch(() => undefined);
+}
+
 async function readLeave(browser: Browser, page: Page, state: TurnState): Promise<LeaveSignals> {
   if (!browser.connected) {
     return { banner: false, captionsIdleMs: Number.POSITIVE_INFINITY, browserClosed: true };
@@ -547,7 +554,10 @@ async function readLeave(browser: Browser, page: Page, state: TurnState): Promis
       captionsIdleMs: Date.now() - state.lastActivityAt,
       browserClosed: false,
     };
-  } catch {
+  } catch (err) {
+    if (isNavigationError(err)) {
+      return { banner: false, captionsIdleMs: Date.now() - state.lastActivityAt, browserClosed: false };
+    }
     return { banner: false, captionsIdleMs: Date.now() - state.lastActivityAt, browserClosed: true };
   }
 }

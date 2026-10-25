@@ -8,6 +8,15 @@ export const CAPTION_KEY = "c";
 
 export const CC_BUTTON_LABELS = ["Turn on captions", "Turn off captions"] as const;
 
+export const CC_ON_LABELS = ["turn on captions", "show captions"] as const;
+
+export const CC_OFF_LABELS = ["turn off captions", "hide captions"] as const;
+
+/** Meet chrome that the caption observer must never treat as speech. */
+export function isMeetChromeText(text: string): boolean {
+  return /hover tray|press down arrow|take notes with gemini|ask gemini|hand raises|arrow_drop_down|people\d/i.test(text);
+}
+
 export const CAPTION_ROW_HINTS = {
   avatar: "img",
   self: "data-self-name",
