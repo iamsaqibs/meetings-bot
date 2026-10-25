@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import { Command } from "commander";
+import { editConfig } from "../config/load.js";
 
 const program = new Command();
 
@@ -54,8 +55,9 @@ program
 program
   .command("config")
   .description("Open the config file in $EDITOR and validate it")
-  .action(() => {
-    throw new Error("not implemented");
+  .action(async () => {
+    const code = await editConfig();
+    process.exit(code);
   });
 
 program.parse();
