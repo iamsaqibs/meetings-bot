@@ -38,6 +38,13 @@ export function resamplePcm16(
   return out;
 }
 
+export function playbackSeconds(chunks: Array<{ pcm: Int16Array; sampleRate: number }>): number {
+  return chunks.reduce((sum, chunk) => {
+    if (chunk.sampleRate <= 0) return sum;
+    return sum + chunk.pcm.length / chunk.sampleRate;
+  }, 0);
+}
+
 function clamp(value: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, value));
 }

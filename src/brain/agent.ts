@@ -3,6 +3,7 @@ import type { Brief } from "../context/brief.js";
 import { describeReadResult, readProjectFile } from "../context/reader.js";
 import { logger } from "../logging/logger.js";
 import type { TranscriptLine } from "../transcript/types.js";
+import { DEFER_LINE } from "../agent/deferPhrases.js";
 import { chat, type ChatMessage, type ToolCall } from "./ollama.js";
 
 const BEHAVIOR_POLICY = `Behavior policy:
@@ -11,8 +12,6 @@ const BEHAVIOR_POLICY = `Behavior policy:
 3. Never invents project facts — if not in the brief or readable files: "I don't have that in the project — I can check the repo after the call" (and it genuinely adds it to the notes follow-ups).
 4. No political/personal opinions; no commitments on Saqib's behalf (FR-8).
 5. Total participation ceiling (config, default: 15 wake replies or 10 minutes of talk time per meeting).`;
-
-const DEFER_LINE = "That's better answered by Saqib himself — over to you.";
 
 const READ_FILE_TOOL = {
   type: "function",

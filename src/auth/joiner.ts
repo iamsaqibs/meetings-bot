@@ -316,6 +316,14 @@ async function readSnapshot(page: Page): Promise<PageSnapshot> {
   return snapshot;
 }
 
+export async function joinPage(browser: Browser): Promise<Page> {
+  return firstPage(browser);
+}
+
+export async function readPageSnapshot(page: Page): Promise<PageSnapshot> {
+  return readSnapshot(page);
+}
+
 async function firstPage(browser: Browser): Promise<Page> {
   const pages = await browser.pages();
   const existing = pages[0];

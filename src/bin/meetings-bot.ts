@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 import { Command } from "commander";
-import { runAuth, runJoin } from "../auth/joiner.js";
-import { editConfig, loadConfig, mergeCliFlags } from "../config/load.js";
+import { runMeeting } from "../agent/orchestrator.js";
+import { runAuth } from "../auth/joiner.js";
+import { editConfig } from "../config/load.js";
 
 const program = new Command();
 
@@ -20,13 +21,15 @@ program
   .option("--model <tag>", "Override the Ollama model")
   .action((opts: { meeting: string; project: string; name?: string; headed?: boolean; model?: string }) =>
     guard(async () => {
-      const config = mergeCliFlags(loadConfig(), { name: opts.name, model: opts.model });
-      await runJoin({
+      const result = await runMeeting({
         meeting: opts.meeting,
         project: opts.project,
         headed: Boolean(opts.headed),
-        displayName: config.bot_name,
+        name: opts.name,
+        model: opts.model,
       });
+      console.log(`Transcript: ${result.transcriptPath}`);
+      process.exit(result.exitCode);
     }),
   );
 

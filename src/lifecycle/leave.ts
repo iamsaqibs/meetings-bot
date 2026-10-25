@@ -12,5 +12,50 @@ export function pageShowsLeave(snapshot: PageSnapshot): boolean {
 }
 
 export function isLeaveDetected(signals: LeaveSignals, idleTimeoutMs: number): boolean {
-  return signals.banner || signals.browserClosed || signals.captionsIdleMs >= idleTimeoutMs;
+  return leaveReason(signals, idleTimeoutMs) !== null;
+}
+
+export function leaveReason(
+  signals: LeaveSignals,
+  idleTimeoutMs: number,
+): "banner" | "browser" | "idle" | null {
+  if (signals.banner) return "banner";
+  if (signals.browserClosed) return "browser";
+  if (signals.captionsIdleMs >= idleTimeoutMs) return "idle";
+  return null;
+}
+
+/** Poll caption idle, the leave banner, and a dead browser. Default period is 5s. */
+export function startLeaveWatch(opts: {
+  idleTimeoutMs: number;
+  pollMs?: number;
+  readSignals: () => LeaveSignals | Promise<LeaveSignals>;
+  onLeave: (reason: "banner" | "browser" | "idle") => void;
+}): { stop: () => void } {
+  let stopped = false;
+  let running = false;
+  const timer = setInterval(() => {
+    if (stopped || running) return;
+    running = true;
+    void Promise.resolve()
+      .then(() => opts.readSignals())
+      .then((signals) => {
+        running = false;
+        if (stopped) return;
+        const reason = leaveReason(signals, opts.idleTimeoutMs);
+        if (!reason) return;
+        stopped = true;
+        clearInterval(timer);
+        opts.onLeave(reason);
+      })
+      .catch(() => {
+        running = false;
+      });
+  }, opts.pollMs ?? 5_000);
+  return {
+    stop() {
+      stopped = true;
+      clearInterval(timer);
+    },
+  };
 }
