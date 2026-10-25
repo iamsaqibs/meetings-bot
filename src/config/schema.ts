@@ -37,6 +37,9 @@ export const CONFIG_DEFAULTS = {
   meet: {
     idle_timeout_minutes: 8,
   },
+  captions: {
+    ariaLabels: ["Captions"],
+  },
 };
 
 const ollamaSchema = z.object({
@@ -67,6 +70,10 @@ const meetSchema = z.object({
   idle_timeout_minutes: z.number().positive(),
 });
 
+const captionsSchema = z.object({
+  ariaLabels: z.array(z.string().min(1)).min(1),
+});
+
 export const AppConfigSchema = z.object({
   wake_names: z.array(z.string().min(1)).min(1),
   bot_name: z.string().min(1),
@@ -76,6 +83,7 @@ export const AppConfigSchema = z.object({
   wake: wakeSchema,
   defer_phrases: z.array(z.string()),
   meet: meetSchema,
+  captions: captionsSchema,
 });
 
 export type AppConfig = z.infer<typeof AppConfigSchema>;
@@ -134,4 +142,9 @@ defer_phrases:
 meet:
   # No finalized captions for this many minutes → treat the meeting as ended.
   idle_timeout_minutes: 8
+
+captions:
+  # Tried in order. Add a localized label here if Meet is not en-US. No code change.
+  ariaLabels:
+    - "Captions"
 `;
