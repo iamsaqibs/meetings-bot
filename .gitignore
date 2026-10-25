@@ -1,0 +1,7 @@
+node_modules/
+dist/
+*.log
+.env
+
+# ~/.meetings-bot/ is the runtime home (Chromium profile, brief cache, logs).
+# It lives outside any repo by design and must never be copied into this tree.
