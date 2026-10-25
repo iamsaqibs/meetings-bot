@@ -1,6 +1,6 @@
 {
   "name": "meetings-bot",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "description": "Shadow assistant that joins Google Meet calls, answers when addressed, and writes notes.",
   "type": "module",
   "engines": {
