@@ -29,6 +29,7 @@ program
         model: opts.model,
       });
       console.log(`Transcript: ${result.transcriptPath}`);
+      if (result.notesPath) console.log(`Notes: ${result.notesPath}`);
       process.exit(result.exitCode);
     }),
   );

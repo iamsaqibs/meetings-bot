@@ -1,3 +1,4 @@
+import path from "node:path";
 import type { Browser, Page } from "puppeteer";
 import { adaptPage, joinMeeting, joinPage, launchBrowser, readPageSnapshot } from "../auth/joiner.js";
 import {
@@ -11,7 +12,10 @@ import type { AppConfig } from "../config/schema.js";
 import { loadConfig, mergeCliFlags } from "../config/load.js";
 import type { Brief } from "../context/brief.js";
 import { loadBrief } from "../context/brief.js";
-import { isLeaveDetected, type LeaveSignals } from "../lifecycle/leave.js";
+import { startLeaveWatch, type LeaveSignals } from "../lifecycle/leave.js";
+import { nextNoteNumber } from "../notes/numbering.js";
+import { summarizeMeeting } from "../notes/summarizer.js";
+import { writeNotesFile } from "../notes/writer.js";
 import { exitCodeFor, installMeetingSignals } from "../lifecycle/signals.js";
 import { logger } from "../logging/logger.js";
 import { installAudioBridge, speakSequence } from "../speaker/injector.js";
@@ -377,7 +381,7 @@ export interface MeetingRunOptions {
   model?: string;
 }
 
-/** Join, listen, and answer. Notes are written by the lifecycle step that consumes MeetingResult. */
+/** Join, listen, answer, and write notes when the call ends. */
 export async function runMeeting(options: MeetingRunOptions): Promise<MeetingResult> {
   let config = mergeCliFlags(loadConfig(), { name: options.name, model: options.model });
   if (options.rehearse) config = applyRehearse(config);
@@ -395,7 +399,9 @@ export async function runMeeting(options: MeetingRunOptions): Promise<MeetingRes
     logger.warn({ detail }, "TTS warmup failed; replies will go to Meet chat");
   }
 
-  const transcriptPath = `${options.project}/meeting-notes/.raw/live-transcript.jsonl`;
+  const notesDir = path.join(options.project, "meeting-notes");
+  const nnn = nextNoteNumber(notesDir);
+  const transcriptPath = path.join(notesDir, ".raw", `${nnn}-transcript.jsonl`);
   const store = new TranscriptStore(transcriptPath);
   const state = createTurnState({
     config,
@@ -406,7 +412,7 @@ export async function runMeeting(options: MeetingRunOptions): Promise<MeetingRes
   });
   const browser = await launchBrowser("join", { headed: options.headed });
   const page = await joinPage(browser);
-  return driveMeeting(options, state, browser, page, provider, transcriptPath);
+  return driveMeeting(options, state, browser, page, provider, transcriptPath, nnn);
 }
 
 async function driveMeeting(
@@ -416,6 +422,7 @@ async function driveMeeting(
   page: Page,
   provider: TtsProvider | null,
   transcriptPath: string,
+  nnn: string,
 ): Promise<MeetingResult> {
   let stop: "clean" | "interrupt" | "crash" = "clean";
   let ended = false;
@@ -434,16 +441,14 @@ async function driveMeeting(
   let failure: unknown;
   const ports = livePorts(page, provider, state);
   const idleTimeoutMs = state.config.meet.idle_timeout_minutes * 60_000;
-  const timer = setInterval(() => {
-    void readLeave(browser, page, state)
-      .then((signals) => {
-        if (isLeaveDetected(signals, idleTimeoutMs)) {
-          stop = signals.browserClosed ? "crash" : "clean";
-          ended = true;
-        }
-      })
-      .catch(() => undefined);
-  }, 5_000);
+  const watch = startLeaveWatch({
+    idleTimeoutMs,
+    readSignals: () => readLeave(browser, page, state),
+    onLeave: (reason) => {
+      stop = reason === "browser" ? "crash" : "clean";
+      ended = true;
+    },
+  });
   try {
     await installAudioBridge(page);
     await joinMeeting(adaptPage(page), options.meeting, { displayName: state.config.bot_name });
@@ -457,26 +462,61 @@ async function driveMeeting(
     failure = err;
     stop = "crash";
   } finally {
-    clearInterval(timer);
+    watch.stop();
     restore();
     await captions?.stop().catch(() => undefined);
-    state.store.close();
     await browser.close().catch(() => undefined);
   }
 
   const partial = stop !== "clean";
-  if (failure instanceof Error) {
-    logger.error({ transcriptPath }, failure.message);
-    throw failure;
+  let notesPath: string | undefined;
+  try {
+    notesPath = await persistNotes(options.project, nnn, state, transcriptPath, partial);
+  } catch (err) {
+    logger.error({ err }, "Notes could not be written. The raw transcript is still on disk.");
+    if (!failure) failure = err;
+  } finally {
+    state.store.close();
   }
+  if (failure instanceof Error) throw failure;
   return {
     transcriptPath,
+    ...(notesPath ? { notesPath } : {}),
     stats: { ...state.stats, talkSeconds: state.talkSeconds },
     followups: [...state.followups],
     qa: [...state.qa],
     exitCode: exitCodeFor(stop),
     partial,
   };
+}
+
+async function persistNotes(
+  project: string,
+  nnn: string,
+  state: TurnState,
+  transcriptPath: string,
+  partial: boolean,
+): Promise<string> {
+  const lines = state.store.lines();
+  const draft = await summarizeMeeting({
+    lines,
+    followups: state.followups,
+    config: state.config,
+    botName: state.config.bot_name,
+  });
+  const written = writeNotesFile({
+    projectDir: project,
+    nnn,
+    when: new Date(),
+    slugQuestion: state.qa[0]?.question,
+    draft,
+    qa: state.qa,
+    lines,
+    transcriptPath,
+    partial,
+  });
+  logger.info({ notesPath: written.notesPath, partial }, "notes written");
+  return written.notesPath;
 }
 
 function livePorts(page: Page, provider: TtsProvider | null, state: TurnState): SpeechPorts {
